@@ -100,9 +100,10 @@ contract Election {
         emit FundsDeposited(msg.sender, msg.value);
     }
 
-    function withdrawFunds(uint256 amount) public onlyAdmin {
-        require(amount <= contractBalance, "Not enough funds");
-        contractBalance -= amount;
+    function withdrawAllFunds() public onlyAdmin {
+        uint256 amount = contractBalance;
+        require(amount > 0, "No funds to withdraw");
+        contractBalance = 0;
         payable(admin).transfer(amount);
         emit FundsWithdrawn(admin, amount);
     }

@@ -26,6 +26,23 @@ async function getElectionContract(adminAddress) {
     return new ethers.Contract(electionAddress, electionABI, wallet);
 }
 
+async function getSignerForAdmin(admin) {
+    const adminAddress = String(admin).toLowerCase(); // ensure string
+    const accounts = await provider.listAccounts();
+
+    console.log("Available accounts:", accounts); // 🔍 debug log
+
+    for (const addr of accounts) {
+        const address = String(addr); // ensure it's string
+        if (address.toLowerCase() === adminAddress) {
+            return provider.getSigner(address);
+        }
+    }
+    throw new Error("Admin signer not found");
+}
+
+
+
 // ✅ API to Create an Election with ETH
 app.post("/create-election", async (req, res) => {
     try {
@@ -51,9 +68,16 @@ app.post("/create-election", async (req, res) => {
 });
 
 // ✅ API to Get Contract Balance
+const { isAddress } = require("ethers");
+
 app.get("/contract-balance/:admin", async (req, res) => {
     try {
         const admin = req.params.admin;
+
+        if (!isAddress(admin)) {
+            return res.status(400).json({ error: "Invalid Ethereum address" });
+        }
+
         const electionContract = await getElectionContract(admin);
         const balance = await provider.getBalance(electionContract.target);
 
@@ -63,6 +87,7 @@ app.get("/contract-balance/:admin", async (req, res) => {
         res.status(500).json({ error: "Failed to get balance" });
     }
 });
+
 
 // ✅ API to Cast a Vote
 app.post("/vote", async (req, res) => {
@@ -98,10 +123,73 @@ app.post("/vote", async (req, res) => {
     }
 });
 
+app.post("/results", async (req, res) => {
+    try {
+        const { admin } = req.body;
+
+        if (!admin) {
+            return res.status(400).json({ error: "Admin address is required" });
+        }
+
+        const electionContract = await getElectionContract(admin);
+
+        // Get all candidates by indexing
+        const candidates = [];
+        let i = 0;
+        while (true) {
+            try {
+                const candidate = await electionContract.candidates(i);
+                candidates.push(candidate);
+                i++;
+            } catch (e) {
+                break; // End of array
+            }
+        }
+
+        const votes = await electionContract.getAllVotes();
+
+        const result = {};
+        for (let j = 0; j < candidates.length; j++) {
+            result[candidates[j]] = parseInt(votes[j]);
+        }
+
+        res.json({ success: true, result });
+    } catch (err) {
+        console.error("❌ Error in /results:", err);
+        res.status(500).json({ error: "Failed to fetch results" });
+    }
+});
+
+app.post("/withdraw", async (req, res) => {
+    try {
+        const { admin } = req.body;
+        if (!admin) return res.status(400).json({ error: "Admin address required" });
+
+        const electionContract = await getElectionContract(admin);
+
+        // OPTIONAL: You can check if the backend wallet is actually the admin on-chain
+        const contractAdmin = await electionContract.admin();
+        if (wallet.address.toLowerCase() !== contractAdmin.toLowerCase()) {
+            return res.status(403).json({ error: "Backend wallet is not the election admin" });
+        }
+
+        // Call withdrawAllFunds()
+        const tx = await electionContract.withdrawAllFunds();
+        await tx.wait();
+
+        res.json({ success: true, txHash: tx.hash });
+    } catch (error) {
+        console.error("❌ Error in /withdraw:", error);
+        res.status(500).json({ error: "Withdrawal failed" });
+    }
+});
+
+
+
 // ✅ Event Listener for Votes
 async function listenToElectionEvents() {
     try {
-        const elections = await factoryContract.getAllElections();
+        const elections = await factoryContract.getDeployedElections();
         for (const electionAddress of elections) {
             const electionContract = new ethers.Contract(electionAddress, electionABI, wallet);
             electionContract.on("VoteCasted", (voter, candidate, beforeBalance, afterBalance) => {
@@ -115,6 +203,7 @@ async function listenToElectionEvents() {
         console.error("❌ Error setting up event listener:", error);
     }
 }
+
 
 // Start event listener
 listenToElectionEvents();
