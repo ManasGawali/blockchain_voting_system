@@ -4,15 +4,16 @@ pragma solidity ^0.8.19;
 contract Election {
     address public admin;
     string public communityName;
+    uint256 public contractBalance;
     string[] public candidates;
     int[] public votes;
-    mapping(string => bool) public isVoter; // Voter validation
-    mapping(string => bool) public hasVoted; // Track if voter has voted
-    uint256 public contractBalance; // Store ETH for gas fees
+    mapping(string => bool) public isVoter;
+    mapping(string => bool) public hasVoted;
+    mapping(bytes32 => bool) public usedSignatures;
 
     event ElectionStarted(address indexed admin, string electionType);
     event VoteCasted(
-        string voter,
+        string indexed voter,
         string candidateName,
         uint256 beforeBalance,
         uint256 afterBalance
@@ -31,6 +32,9 @@ contract Election {
         string[] memory _candidates,
         string[] memory _voters
     ) payable {
+        require(_candidates.length >= 2, "At least two candidates required");
+        require(_voters.length > 0, "At least one voter required");
+        require(_voters.length <= 1000, "Too many voters");
         require(
             msg.value > 0.01 ether * _voters.length,
             "Not enough ETH to cover gas fees"
@@ -51,7 +55,7 @@ contract Election {
 
     function findCandidate(
         string memory candidateName
-    ) public view returns (int256) {
+    ) internal view returns (int256) {
         for (uint256 i = 0; i < candidates.length; i++) {
             if (
                 keccak256(abi.encodePacked(candidates[i])) ==
@@ -63,13 +67,22 @@ contract Election {
         return -1; // Candidate not found
     }
 
-    function vote(string memory voter, string memory candidateName) public {
+    function voteWithSignature(
+        string memory voter,
+        string memory candidateName,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        bytes32 messageHash = keccak256(abi.encodePacked(voter, candidateName, address(this)));
+        bytes32 prefixedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
+
+        address signer = ecrecover(prefixedHash, v, r, s);
+        require(signer != address(0), "Invalid signature");
         require(isVoter[voter], "Not a registered voter");
         require(!hasVoted[voter], "Voter has already voted");
-        require(
-            address(this).balance >= 0.01 ether,
-            "Not enough ETH to cover gas fees"
-        );
+        require(!usedSignatures[prefixedHash], "Signature already used");
+        require(address(this).balance >= 0.01 ether, "Not enough ETH to cover gas fees");
 
         int256 candidateIndex = findCandidate(candidateName);
         require(candidateIndex != -1, "Candidate not found");
@@ -78,10 +91,14 @@ contract Election {
 
         votes[uint256(candidateIndex)] += 1;
         hasVoted[voter] = true;
+        usedSignatures[prefixedHash] = true;
 
-        uint256 afterBalance = address(this).balance;
+        uint256 gasReimbursement = 0.01 ether;
+        contractBalance -= gasReimbursement;
+        (bool sent, ) = msg.sender.call{value: gasReimbursement}("");
+        require(sent, "Failed to reimburse relayer");
 
-        emit VoteCasted(voter, candidateName, beforeBalance, afterBalance);
+        emit VoteCasted(voter, candidateName, beforeBalance, address(this).balance);
     }
 
     function getVotes(string memory candidateName) public view returns (int) {
@@ -104,11 +121,16 @@ contract Election {
         uint256 amount = contractBalance;
         require(amount > 0, "No funds to withdraw");
         contractBalance = 0;
-        payable(admin).transfer(amount);
+        (bool sent, ) = payable(admin).call{value: amount}("");
+        require(sent, "Failed to withdraw funds");
         emit FundsWithdrawn(admin, amount);
     }
 
     function getContractBalance() public view returns (uint256) {
         return address(this).balance;
+    }
+
+    receive() external payable {
+        contractBalance += msg.value;
     }
 }

@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
-const { ethers } = require("ethers");
+const ethers = require("ethers");
+
 
 const app = express();
 const PORT = 3000;
@@ -10,7 +11,7 @@ app.use(express.json());
 const factoryAddress = process.env.FACTORY_CONTRACT;
 const privateKey = process.env.ADMIN_PRIVATE_KEY;
 
-const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+const provider = new ethers.JsonRpcProvider(`https://sepolia.infura.io/v3/${process.env.INFURA_API_KEY}`);
 const wallet = new ethers.Wallet(privateKey, provider);
 
 const factoryABI = require("./artifacts/contracts/ElectionFactory.sol/ElectionFactory.json").abi;
@@ -44,28 +45,31 @@ async function getSignerForAdmin(admin) {
 
 
 // ✅ API to Create an Election with ETH
-app.post("/create-election", async (req, res) => {
+app.post('/create-election', async (req, res) => {
     try {
-        const { electionName, voters, candidates, depositAmount } = req.body;
+      const { electionName, voters, candidates } = req.body;
+      const voterIds = voters.map(v => v.id);
 
-        if (!electionName || !Array.isArray(voters) || !Array.isArray(candidates) || isNaN(depositAmount) || depositAmount <= 0) {
-            return res.status(400).json({ error: "Invalid parameters. Ensure depositAmount is a positive number." });
-        }
+      console.log("Voters:", voterIds);
+      console.log("Candidates:", candidates);
+      console.log("Election Name:", electionName);
 
-        console.log(`Creating election: ${electionName} with voters and candidates`);
-
-        const tx = await factoryContract.createElection(electionName, voters, candidates, {
-            value: ethers.parseEther(depositAmount.toString()) // Send ETH
-        });
-        await tx.wait();
-
-        console.log(`Election created: TX Hash - ${tx.hash}`);
-        res.json({ success: true, txHash: tx.hash });
-    } catch (error) {
-        console.error("Error creating election:", error);
-        res.status(500).json({ error: "Failed to create election" });
+      const depositAmount = ethers.parseEther(((voters.length+1) * 0.01).toString());
+  
+      const tx = await factoryContract.createElection(
+        electionName,
+        candidates,
+        voterIds,
+        { value: depositAmount }
+      );
+  
+      await tx.wait();
+      res.status(200).json({ success: true, txHash: tx.hash });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ success: false, error: err.message });
     }
-});
+  });
 
 // ✅ API to Get Contract Balance
 const { isAddress } = require("ethers");
